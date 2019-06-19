@@ -2,13 +2,20 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"log"
 	"net/http"
 
 	"github.com/digitalbitbox/bitbox-base/middleware/src/system"
+	"github.com/digitalbitbox/bitbox-wallet-app/util/errp"
+	"github.com/flynn/noise"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+)
+
+const (
+	opICanHasHandShaek = "h"
 )
 
 // Middleware provides an interface to the middleware package.
@@ -27,6 +34,12 @@ type Handlers struct {
 	middleware Middleware
 	//TODO(TheCharlatan): Starting from the generic interface, flesh out restrictive types over time as the code implements more services.
 	middlewareEvents <-chan interface{}
+
+	clientNoiseStaticPubkey       []byte
+	channelHash                   string
+	channelHashMiddlewareVerified bool
+	channelHashClientVerified     bool
+	sendCipher, receiveCipher     *noise.CipherState
 }
 
 // NewHandlers returns a handler instance.
@@ -45,6 +58,75 @@ func NewHandlers(middlewareInstance Middleware) *Handlers {
 
 	handlers.middlewareEvents = handlers.middleware.Start()
 	return handlers
+}
+
+func (handlers *Handlers) initializeNoise(client *websocket.Conn) error {
+	cipherSuite := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+	keypair := handlers.configGetMiddlewareNoiseStaticKeypair()
+	if keypair == nil {
+		log.Println("noise static keypair created")
+		kp, err := cipherSuite.GenerateKeypair(rand.Reader)
+		if err != nil {
+			panic(err)
+		}
+		keypair = &kp
+		if err := handlers.configSetMiddlewareNoiseStaticKeypair(keypair); err != nil {
+			log.Println("could not store app noise static keypair")
+
+			// Not a critical error, ignore.
+		}
+	}
+	handshake, err := noise.NewHandshakeState(noise.Config{
+		CipherSuite:   cipherSuite,
+		Random:        rand.Reader,
+		Pattern:       noise.HandshakeXX,
+		StaticKeypair: *keypair,
+		Prologue:      []byte("Noise_XX_25519_ChaChaPoly_SHA256"),
+		Initiator:     true,
+	})
+	if err != nil {
+		return err
+		log.Printf("%v", handshake)
+	}
+
+	//Not sure if we should keep this, my current idea is to first make a generic get request that makes the middleware open an extra tcp socket
+	//responseBytes, err := device.queryRaw([]byte(opICanHasHandShaek))
+	client.WriteMessage(1, []byte(opICanHasHandShaek))
+	_, responseBytes, err := client.ReadMessage()
+	if string(responseBytes) != string(opICanHasHandShaek) {
+		log.Println("Initial response bytes did not match what we were expecting")
+	}
+	client.WriteMessage(1, []byte("ACK"))
+
+	// Do handshake. My current idea to protect against session highjacking and making the connection fail on purposed is to use websocket. I am not sure exactly how this should work though, since I need to be able to both read and write. Further, the question also is how to handle those requests that are currently just some generic http.
+	_, responseBytes, err = client.ReadMessage()
+	if err != nil {
+		panic(err)
+	}
+	_, _, _, err = handshake.ReadMessage(nil, responseBytes)
+	if err != nil {
+		panic(err)
+	}
+	msg, _, _, err := handshake.WriteMessage(nil, nil)
+	if err != nil {
+		panic(err)
+	}
+	client.WriteMessage(1, msg)
+	_, responseBytes, err = client.ReadMessage()
+	if err != nil {
+		panic(err)
+	}
+	msg, handlers.sendCipher, handlers.receiveCipher, err = handshake.WriteMessage(nil, nil)
+	if err != nil {
+		panic(err)
+	}
+	client.WriteMessage(1, msg)
+	handlers.clientNoiseStaticPubkey = handshake.PeerStatic()
+	if len(handlers.clientNoiseStaticPubkey) != 32 {
+		panic(errp.New("expected 32 byte remote static pubkey"))
+	}
+
+	return nil
 }
 
 // TODO(TheCharlatan): Define a better error-response system. In future, this should be the first step in an authentication procedure.
@@ -76,6 +158,12 @@ func (handlers *Handlers) wsHandler(w http.ResponseWriter, r *http.Request) {
 	ws, err := handlers.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err.Error() + " Failed to upgrade connection")
+	}
+
+	err = handlers.initializeNoise(ws)
+	if err != nil {
+		log.Println(err.Error() + "Noise connection failed to initialize")
+		return
 	}
 
 	err = handlers.serveSampleInfoToClient(ws)
