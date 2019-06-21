@@ -82,45 +82,66 @@ func (handlers *Handlers) initializeNoise(client *websocket.Conn) error {
 		Pattern:       noise.HandshakeXX,
 		StaticKeypair: *keypair,
 		Prologue:      []byte("Noise_XX_25519_ChaChaPoly_SHA256"),
-		Initiator:     true,
+		Initiator:     false,
 	})
 	if err != nil {
-		return err
 		log.Printf("%v", handshake)
+		return err
 	}
 
 	//Not sure if we should keep this, my current idea is to first make a generic get request that makes the middleware open an extra tcp socket
 	//responseBytes, err := device.queryRaw([]byte(opICanHasHandShaek))
-	client.WriteMessage(1, []byte(opICanHasHandShaek))
 	_, responseBytes, err := client.ReadMessage()
+	if err != nil {
+		panic(err)
+	}
 	if string(responseBytes) != string(opICanHasHandShaek) {
 		log.Println("Initial response bytes did not match what we were expecting")
 	}
-	client.WriteMessage(1, []byte("ACK"))
+	err = client.WriteMessage(1, []byte("ACK"))
+	if err != nil {
+		panic(err)
+	}
 
 	// Do handshake. My current idea to protect against session highjacking and making the connection fail on purposed is to use websocket. I am not sure exactly how this should work though, since I need to be able to both read and write. Further, the question also is how to handle those requests that are currently just some generic http.
+	log.Println("Reading first noise message from client")
 	_, responseBytes, err = client.ReadMessage()
 	if err != nil {
 		panic(err)
 	}
+	log.Println("Reading this message into the handshake state")
 	_, _, _, err = handshake.ReadMessage(nil, responseBytes)
 	if err != nil {
 		panic(err)
 	}
+	log.Println("Writing a new noise message")
 	msg, _, _, err := handshake.WriteMessage(nil, nil)
 	if err != nil {
 		panic(err)
 	}
-	client.WriteMessage(1, msg)
+	err = client.WriteMessage(1, msg)
+	if err != nil {
+		panic(err)
+	}
+	log.Println("Reading a new noise message")
 	_, responseBytes, err = client.ReadMessage()
 	if err != nil {
 		panic(err)
 	}
-	msg, handlers.sendCipher, handlers.receiveCipher, err = handshake.WriteMessage(nil, nil)
+	log.Println("Reading this message into the noise handshake state")
+	msg, handlers.sendCipher, handlers.receiveCipher, err = handshake.ReadMessage(nil, responseBytes)
 	if err != nil {
 		panic(err)
 	}
-	client.WriteMessage(1, msg)
+	//msg, handlers.sendCipher, handlers.receiveCipher, err = handshake.WriteMessage(nil, nil)
+	//if err != nil {
+	//	panic(err)
+	//}
+
+	err = client.WriteMessage(1, msg)
+	if err != nil {
+		panic(err)
+	}
 	handlers.clientNoiseStaticPubkey = handshake.PeerStatic()
 	if len(handlers.clientNoiseStaticPubkey) != 32 {
 		panic(errp.New("expected 32 byte remote static pubkey"))
@@ -176,7 +197,14 @@ func (handlers *Handlers) serveSampleInfoToClient(ws *websocket.Conn) error {
 	for {
 		i++
 		event := <-handlers.middlewareEvents
-		err := ws.WriteJSON(event)
+		message, err := json.Marshal(event)
+		if err != nil {
+			log.Println("Failed to marshal even json bytes before sending over websocket")
+		}
+		messageEncrypted := handlers.sendCipher.Encrypt(nil, nil, message)
+		log.Println("Plaintext:\n ", string(message), "Ciphertext:\n ", string(messageEncrypted))
+		err = ws.WriteMessage(1, messageEncrypted)
+
 		if err != nil {
 			log.Println(err.Error() + " Unexpected websocket error")
 			ws.Close()
