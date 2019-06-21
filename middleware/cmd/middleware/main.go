@@ -3,7 +3,10 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
+	"io/ioutil"
 	"log"
 	"net/http"
 
@@ -35,7 +38,39 @@ func main() {
 	handlers := handlers.NewHandlers(middleware)
 	log.Println("Binding middleware api to port 8845")
 
-	if err := http.ListenAndServe(":8845", handlers.Router); err != nil {
+	certBytes, err := ioutil.ReadFile("server.crt")
+	if err != nil {
+		log.Fatalln("Unable to read server.crt - is it created?", err)
+	}
+
+	clientCertPool := x509.NewCertPool()
+	if ok := clientCertPool.AppendCertsFromPEM(certBytes); !ok {
+		log.Fatalln("Unable to add certificate to certificate pool")
+	}
+
+	tlsConfig := &tls.Config{
+		// Reject any TLS certificate that cannot be validated
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		// Ensure that we only use our "CA" to validate certificates
+		ClientCAs: clientCertPool,
+		// Reject clients with RSA certificate, required settings for http-2
+		CipherSuites: []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
+		// Force it on our side
+		PreferServerCipherSuites: true,
+		// Force TLS 1.3
+		MinVersion: tls.VersionTLS13,
+	}
+
+	// Build a "map" to our client certs.
+	tlsConfig.BuildNameToCertificate()
+
+	httpServer := &http.Server{
+		Addr:      ":8045",
+		TLSConfig: tlsConfig,
+		Handler:   handlers.Router,
+	}
+
+	if err := httpServer.ListenAndServeTLS("server.crt", "server.key"); err != nil {
 		log.Println(err.Error() + " Failed to listen for HTTP")
 	}
 }
