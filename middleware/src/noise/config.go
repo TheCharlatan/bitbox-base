@@ -1,4 +1,4 @@
-package handlers
+package noisemanager
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 )
 
 const configFilename = "base.json"
-const configDir = "$HOME/base"
+const configDir = "$HOME/.base"
 
 type noiseKeypair struct {
 	Private []byte `json:"private"`
@@ -24,7 +24,7 @@ type configuration struct {
 	ClientNoiseStaticPubkeys     [][]byte      `json:"deviceNoiseStaticPubkeys"`
 }
 
-func (handlers *Handlers) readConfig() *configuration {
+func (noiseConfig *NoiseConfig) readConfig() *configuration {
 	configFile := config.NewFile(configDir, configFilename)
 	if !configFile.Exists() {
 		return &configuration{}
@@ -36,16 +36,16 @@ func (handlers *Handlers) readConfig() *configuration {
 	return &conf
 }
 
-func (handlers *Handlers) storeConfig(conf *configuration) error {
+func (noiseConfig *NoiseConfig) storeConfig(conf *configuration) error {
 	configFile := config.NewFile(configDir, configFilename)
 	return configFile.WriteJSON(conf)
 }
 
-func (handlers *Handlers) configContainsClientStaticPubkey(pubkey []byte) bool {
+func (noiseConfig *NoiseConfig) configContainsClientStaticPubkey(pubkey []byte) bool {
 	//device.mu.RLock()
 	//defer device.mu.RUnlock()
 
-	for _, configPubkey := range handlers.readConfig().ClientNoiseStaticPubkeys {
+	for _, configPubkey := range noiseConfig.readConfig().ClientNoiseStaticPubkeys {
 		if bytes.Equal(configPubkey, pubkey) {
 			return true
 		}
@@ -53,8 +53,8 @@ func (handlers *Handlers) configContainsClientStaticPubkey(pubkey []byte) bool {
 	return false
 }
 
-func (handlers *Handlers) configAddClientStaticPubkey(pubkey []byte) error {
-	if handlers.configContainsClientStaticPubkey(pubkey) {
+func (noiseConfig *NoiseConfig) configAddClientStaticPubkey(pubkey []byte) error {
+	if noiseConfig.configContainsClientStaticPubkey(pubkey) {
 		// Don't add again if already present.
 		return nil
 	}
@@ -62,16 +62,16 @@ func (handlers *Handlers) configAddClientStaticPubkey(pubkey []byte) error {
 	//device.mu.Lock()
 	//defer device.mu.Unlock()
 
-	config := handlers.readConfig()
+	config := noiseConfig.readConfig()
 	config.ClientNoiseStaticPubkeys = append(config.ClientNoiseStaticPubkeys, pubkey)
-	return handlers.storeConfig(config)
+	return noiseConfig.storeConfig(config)
 }
 
-func (handlers *Handlers) configGetMiddlewareNoiseStaticKeypair() *noise.DHKey {
+func (noiseConfig *NoiseConfig) getMiddlewareNoiseStaticKeypair() *noise.DHKey {
 	//device.mu.RLock()
 	//defer device.mu.RUnlock()
 
-	key := handlers.readConfig().MiddlewareNoiseStaticKeypair
+	key := noiseConfig.readConfig().MiddlewareNoiseStaticKeypair
 	if key == nil {
 		return nil
 	}
@@ -81,16 +81,16 @@ func (handlers *Handlers) configGetMiddlewareNoiseStaticKeypair() *noise.DHKey {
 	}
 }
 
-func (handlers *Handlers) configSetMiddlewareNoiseStaticKeypair(key *noise.DHKey) error {
+func (noiseConfig *NoiseConfig) setMiddlewareNoiseStaticKeypair(key *noise.DHKey) error {
 	//device.mu.Lock()
 	//defer device.mu.Unlock()
 
-	config := handlers.readConfig()
+	config := noiseConfig.readConfig()
 	config.MiddlewareNoiseStaticKeypair = &noiseKeypair{
 		Private: key.Private,
 		Public:  key.Public,
 	}
-	return handlers.storeConfig(config)
+	return noiseConfig.storeConfig(config)
 }
 
 // File models a config file in the application's directory.

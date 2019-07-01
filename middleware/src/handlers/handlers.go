@@ -1,22 +1,20 @@
-// Package handlers implements an api for the bitbox-wallet-app to talk to.
+// Package handlers implements an api for the bitbox-wallet-app to talk to. It also takes care of running the noise encryption.
 package handlers
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"log"
 	"net/http"
 
+	noisemanager "github.com/digitalbitbox/bitbox-base/middleware/src/noise"
 	"github.com/digitalbitbox/bitbox-base/middleware/src/system"
-	"github.com/digitalbitbox/bitbox-wallet-app/util/errp"
-	"github.com/flynn/noise"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 )
 
-const (
-	opICanHasHandShaek = "h"
-)
+//const (
+//	opICanHasHandShaek = "h"
+//)
 
 // Middleware provides an interface to the middleware package.
 type Middleware interface {
@@ -35,11 +33,12 @@ type Handlers struct {
 	//TODO(TheCharlatan): Starting from the generic interface, flesh out restrictive types over time as the code implements more services.
 	middlewareEvents <-chan interface{}
 
-	clientNoiseStaticPubkey       []byte
-	channelHash                   string
-	channelHashMiddlewareVerified bool
-	channelHashClientVerified     bool
-	sendCipher, receiveCipher     *noise.CipherState
+	noiseConfig *noisemanager.NoiseConfig
+	//clientNoiseStaticPubkey       []byte
+	//channelHash                   string
+	//channelHashMiddlewareVerified bool
+	//channelHashClientVerified     bool
+	//sendCipher, receiveCipher     *noise.CipherState
 }
 
 // NewHandlers returns a handler instance.
@@ -50,7 +49,8 @@ func NewHandlers(middlewareInstance Middleware) *Handlers {
 		middleware: middlewareInstance,
 		Router:     router,
 		// TODO(TheCharlatan): The upgrader should do an origin check before upgrading. This is important later once we introduce authentication.
-		upgrader: websocket.Upgrader{},
+		upgrader:    websocket.Upgrader{},
+		noiseConfig: noisemanager.NewNoiseConfig(),
 	}
 	handlers.Router.HandleFunc("/", handlers.rootHandler).Methods("GET")
 	handlers.Router.HandleFunc("/ws", handlers.wsHandler)
@@ -58,96 +58,6 @@ func NewHandlers(middlewareInstance Middleware) *Handlers {
 
 	handlers.middlewareEvents = handlers.middleware.Start()
 	return handlers
-}
-
-func (handlers *Handlers) initializeNoise(client *websocket.Conn) error {
-	cipherSuite := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
-	keypair := handlers.configGetMiddlewareNoiseStaticKeypair()
-	if keypair == nil {
-		log.Println("noise static keypair created")
-		kp, err := cipherSuite.GenerateKeypair(rand.Reader)
-		if err != nil {
-			panic(err)
-		}
-		keypair = &kp
-		if err := handlers.configSetMiddlewareNoiseStaticKeypair(keypair); err != nil {
-			log.Println("could not store app noise static keypair")
-
-			// Not a critical error, ignore.
-		}
-	}
-	handshake, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite:   cipherSuite,
-		Random:        rand.Reader,
-		Pattern:       noise.HandshakeXX,
-		StaticKeypair: *keypair,
-		Prologue:      []byte("Noise_XX_25519_ChaChaPoly_SHA256"),
-		Initiator:     false,
-	})
-	if err != nil {
-		log.Printf("%v", handshake)
-		return err
-	}
-
-	//Not sure if we should keep this, my current idea is to first make a generic get request that makes the middleware open an extra tcp socket
-	//responseBytes, err := device.queryRaw([]byte(opICanHasHandShaek))
-	_, responseBytes, err := client.ReadMessage()
-	if err != nil {
-		panic(err)
-	}
-	if string(responseBytes) != string(opICanHasHandShaek) {
-		log.Println("Initial response bytes did not match what we were expecting")
-	}
-	err = client.WriteMessage(1, []byte("ACK"))
-	if err != nil {
-		panic(err)
-	}
-
-	// Do handshake. My current idea to protect against session highjacking and making the connection fail on purposed is to use websocket. I am not sure exactly how this should work though, since I need to be able to both read and write. Further, the question also is how to handle those requests that are currently just some generic http.
-	log.Println("Reading first noise message from client")
-	_, responseBytes, err = client.ReadMessage()
-	if err != nil {
-		panic(err)
-	}
-	log.Println("Reading this message into the handshake state")
-	_, _, _, err = handshake.ReadMessage(nil, responseBytes)
-	if err != nil {
-		panic(err)
-	}
-	log.Println("Writing a new noise message")
-	msg, _, _, err := handshake.WriteMessage(nil, nil)
-	if err != nil {
-		panic(err)
-	}
-	err = client.WriteMessage(1, msg)
-	if err != nil {
-		panic(err)
-	}
-	log.Println("Reading a new noise message")
-	_, responseBytes, err = client.ReadMessage()
-	if err != nil {
-		panic(err)
-	}
-	log.Println("Reading this message into the noise handshake state")
-	msg, handlers.sendCipher, handlers.receiveCipher, err = handshake.ReadMessage(nil, responseBytes)
-	if err != nil {
-		panic(err)
-	}
-	//msg, handlers.sendCipher, handlers.receiveCipher, err = handshake.WriteMessage(nil, nil)
-	//if err != nil {
-	//	panic(err)
-	//}
-
-	err = client.WriteMessage(1, msg)
-	if err != nil {
-		panic(err)
-	}
-	handlers.clientNoiseStaticPubkey = handshake.PeerStatic()
-	if len(handlers.clientNoiseStaticPubkey) != 32 {
-		panic(errp.New("expected 32 byte remote static pubkey"))
-	}
-
-	return nil
 }
 
 // TODO(TheCharlatan): Define a better error-response system. In future, this should be the first step in an authentication procedure.
@@ -181,7 +91,7 @@ func (handlers *Handlers) wsHandler(w http.ResponseWriter, r *http.Request) {
 		log.Println(err.Error() + " Failed to upgrade connection")
 	}
 
-	err = handlers.initializeNoise(ws)
+	err = handlers.noiseConfig.InitializeNoise(ws)
 	if err != nil {
 		log.Println(err.Error() + "Noise connection failed to initialize")
 		return
@@ -201,7 +111,8 @@ func (handlers *Handlers) serveSampleInfoToClient(ws *websocket.Conn) error {
 		if err != nil {
 			log.Println("Failed to marshal even json bytes before sending over websocket")
 		}
-		messageEncrypted := handlers.sendCipher.Encrypt(nil, nil, message)
+		//messageEncrypted := handlers.sendCipher.Encrypt(nil, nil, message)
+		messageEncrypted := handlers.noiseConfig.Encrypt(message)
 		log.Println("Plaintext:\n ", string(message), "Ciphertext:\n ", string(messageEncrypted))
 		err = ws.WriteMessage(1, messageEncrypted)
 
