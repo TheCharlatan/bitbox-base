@@ -103,16 +103,19 @@ func (handlers *Handlers) wsHandler(w http.ResponseWriter, r *http.Request) {
 
 // serveSampleInfoToClient takes a single connected ws client and streams data to it indefinitely until the client disconnected, or a websocket error forces it to return.
 func (handlers *Handlers) serveSampleInfoToClient(ws *websocket.Conn) error {
+	var message, messageEncrypted []byte
+	var event interface{}
+	var err error
 	var i = 0
 	for {
 		i++
-		event := <-handlers.middlewareEvents
-		message, err := json.Marshal(event)
+		event = <-handlers.middlewareEvents
+		message, err = json.Marshal(event)
 		if err != nil {
 			log.Println("Failed to marshal even json bytes before sending over websocket")
 		}
 		//messageEncrypted := handlers.sendCipher.Encrypt(nil, nil, message)
-		messageEncrypted := handlers.noiseConfig.Encrypt(message)
+		messageEncrypted = handlers.noiseConfig.Encrypt(message)
 		log.Println("Plaintext:\n ", string(message), "Ciphertext:\n ", string(messageEncrypted))
 		err = ws.WriteMessage(1, messageEncrypted)
 

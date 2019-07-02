@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	opICanHasHandShaek = "h"
+	opICanHasHandShaek          = "h"
+	opICanHasPairinVerificashun = "v"
 )
 
 type NoiseConfig struct {
@@ -41,8 +42,6 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 		keypair := &kp
 		if err := noiseConfig.setMiddlewareNoiseStaticKeypair(keypair); err != nil {
 			log.Println("could not store app noise static keypair")
-
-			// Not a critical error, ignore.
 		}
 	}
 	handshake, err := noise.NewHandshakeState(noise.Config{
@@ -100,15 +99,8 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 	if err != nil {
 		panic(err)
 	}
-	//msg, handlers.sendCipher, handlers.receiveCipher, err = handshake.WriteMessage(nil, nil)
-	//if err != nil {
-	//	panic(err)
-	//}
 
-	//err = ws.WriteMessage(1, msg)
-	//if err != nil {
-	//	panic(err)
-	//}
+	// Now start the verification of the channel hash
 	noiseConfig.clientNoiseStaticPubkey = handshake.PeerStatic()
 	if len(noiseConfig.clientNoiseStaticPubkey) != 32 {
 		panic(errp.New("expected 32 byte remote static pubkey"))
@@ -118,15 +110,19 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 	if err != nil {
 		panic(err)
 	}
+	responseBytes, err = noiseConfig.Decrypt(responseBytes)
+	if err != nil {
+		panic(err)
+	}
 	pairingVerificationRequiredByClient := false
-	if string(responseBytes) == "v" {
+	if string(responseBytes) == opICanHasPairinVerificashun {
 		pairingVerificationRequiredByClient = true
 	}
 	pairingVerificationRequiredByMiddleware := !noiseConfig.containsClientStaticPubkey(noiseConfig.clientNoiseStaticPubkey)
 	if pairingVerificationRequiredByMiddleware {
-		msg = []byte("v")
+		msg = []byte(opICanHasPairinVerificashun)
 	}
-	err = ws.WriteMessage(websocket.TextMessage, msg)
+	err = ws.WriteMessage(websocket.TextMessage, noiseConfig.Encrypt(msg))
 	if err != nil {
 		panic(err)
 	}
@@ -142,6 +138,7 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 		log.Println("This is the noise channel hash: ", noiseConfig.channelHash)
 		// TODO(TheCharlatan) At this point, the channel Hash should be displayed on the screen, with a blocking call.
 		// For now, just add a dummy timer, since we do not have a screen yet, and make every verification a success.
+		// Also skip writing the static key to the file, since we do not want to skip the timer yet, such that we can test its behaviour.
 		time.Sleep(2 * time.Second)
 		err = ws.WriteMessage(websocket.TextMessage, []byte("ACK"))
 		if err != nil {
@@ -153,4 +150,8 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 
 func (noiseConfig *NoiseConfig) Encrypt(message []byte) []byte {
 	return noiseConfig.sendCipher.Encrypt(nil, nil, message)
+}
+
+func (noiseConfig *NoiseConfig) Decrypt(message []byte) ([]byte, error) {
+	return noiseConfig.receiveCipher.Decrypt(nil, nil, message)
 }

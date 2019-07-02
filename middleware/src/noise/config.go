@@ -50,7 +50,7 @@ func (noiseConfig *NoiseConfig) containsClientStaticPubkey(pubkey []byte) bool {
 	return false
 }
 
-func (noiseConfig *NoiseConfig) configAddClientStaticPubkey(pubkey []byte) error {
+func (noiseConfig *NoiseConfig) addClientStaticPubkey(pubkey []byte) error {
 	if noiseConfig.containsClientStaticPubkey(pubkey) {
 		// Don't add again if already present.
 		return nil
