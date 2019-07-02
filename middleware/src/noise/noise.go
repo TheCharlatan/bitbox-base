@@ -2,7 +2,10 @@ package noisemanager
 
 import (
 	"crypto/rand"
+	"encoding/base32"
+	"fmt"
 	"log"
+	"time"
 
 	"github.com/digitalbitbox/bitbox-wallet-app/util/errp"
 	"github.com/flynn/noise"
@@ -14,7 +17,7 @@ const (
 )
 
 type NoiseConfig struct {
-	clientNoiseConfigStaticPubkey []byte
+	clientNoiseStaticPubkey       []byte
 	channelHash                   string
 	channelHashMiddlewareVerified bool
 	channelHashClientVerified     bool
@@ -55,8 +58,7 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 		return err
 	}
 
-	//Not sure if we should keep this, my current idea is to first make a generic get request that makes the middleware open an extra tcp socket
-	//responseBytes, err := device.queryRaw([]byte(opICanHasHandShaek))
+	log.Println("Just something to indicate that the handshake is initialized")
 	_, responseBytes, err := ws.ReadMessage()
 	if err != nil {
 		panic(err)
@@ -69,7 +71,6 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 		panic(err)
 	}
 
-	// Do handshake. My current idea to protect against session highjacking and making the connection fail on purposed is to use websocket. I am not sure exactly how this should work though, since I need to be able to both read and write. Further, the question also is how to handle those requests that are currently just some generic http.
 	log.Println("Reading first noise message from client")
 	_, responseBytes, err = ws.ReadMessage()
 	if err != nil {
@@ -95,7 +96,7 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 		panic(err)
 	}
 	log.Println("Reading this message into the noise handshake state")
-	msg, noiseConfig.sendCipher, noiseConfig.receiveCipher, err = handshake.ReadMessage(nil, responseBytes)
+	_, noiseConfig.sendCipher, noiseConfig.receiveCipher, err = handshake.ReadMessage(nil, responseBytes)
 	if err != nil {
 		panic(err)
 	}
@@ -104,15 +105,49 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 	//	panic(err)
 	//}
 
-	err = ws.WriteMessage(1, msg)
-	if err != nil {
-		panic(err)
-	}
-	noiseConfig.clientNoiseConfigStaticPubkey = handshake.PeerStatic()
-	if len(noiseConfig.clientNoiseConfigStaticPubkey) != 32 {
+	//err = ws.WriteMessage(1, msg)
+	//if err != nil {
+	//	panic(err)
+	//}
+	noiseConfig.clientNoiseStaticPubkey = handshake.PeerStatic()
+	if len(noiseConfig.clientNoiseStaticPubkey) != 32 {
 		panic(errp.New("expected 32 byte remote static pubkey"))
 	}
 
+	_, responseBytes, err = ws.ReadMessage()
+	if err != nil {
+		panic(err)
+	}
+	pairingVerificationRequiredByClient := false
+	if string(responseBytes) == "v" {
+		pairingVerificationRequiredByClient = true
+	}
+	pairingVerificationRequiredByMiddleware := !noiseConfig.containsClientStaticPubkey(noiseConfig.clientNoiseStaticPubkey)
+	if pairingVerificationRequiredByMiddleware {
+		msg = []byte("v")
+	}
+	err = ws.WriteMessage(websocket.TextMessage, msg)
+	if err != nil {
+		panic(err)
+	}
+
+	if pairingVerificationRequiredByMiddleware || pairingVerificationRequiredByClient {
+		channelHashBase32 := base32.StdEncoding.EncodeToString(handshake.ChannelBinding())
+		noiseConfig.channelHash = fmt.Sprintf(
+			"%s %s\n%s %s",
+			channelHashBase32[:5],
+			channelHashBase32[5:10],
+			channelHashBase32[10:15],
+			channelHashBase32[15:20])
+		log.Println("This is the noise channel hash: ", noiseConfig.channelHash)
+		// TODO(TheCharlatan) At this point, the channel Hash should be displayed on the screen, with a blocking call.
+		// For now, just add a dummy timer, since we do not have a screen yet, and make every verification a success.
+		time.Sleep(2 * time.Second)
+		err = ws.WriteMessage(websocket.TextMessage, []byte("ACK"))
+		if err != nil {
+			panic(err)
+		}
+	}
 	return nil
 }
 

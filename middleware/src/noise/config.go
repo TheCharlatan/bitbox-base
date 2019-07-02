@@ -12,7 +12,7 @@ import (
 )
 
 const configFilename = "base.json"
-const configDir = "$HOME/.base"
+const configDir = ".base"
 
 type noiseKeypair struct {
 	Private []byte `json:"private"`
@@ -41,10 +41,7 @@ func (noiseConfig *NoiseConfig) storeConfig(conf *configuration) error {
 	return configFile.WriteJSON(conf)
 }
 
-func (noiseConfig *NoiseConfig) configContainsClientStaticPubkey(pubkey []byte) bool {
-	//device.mu.RLock()
-	//defer device.mu.RUnlock()
-
+func (noiseConfig *NoiseConfig) containsClientStaticPubkey(pubkey []byte) bool {
 	for _, configPubkey := range noiseConfig.readConfig().ClientNoiseStaticPubkeys {
 		if bytes.Equal(configPubkey, pubkey) {
 			return true
@@ -54,13 +51,10 @@ func (noiseConfig *NoiseConfig) configContainsClientStaticPubkey(pubkey []byte) 
 }
 
 func (noiseConfig *NoiseConfig) configAddClientStaticPubkey(pubkey []byte) error {
-	if noiseConfig.configContainsClientStaticPubkey(pubkey) {
+	if noiseConfig.containsClientStaticPubkey(pubkey) {
 		// Don't add again if already present.
 		return nil
 	}
-
-	//device.mu.Lock()
-	//defer device.mu.Unlock()
 
 	config := noiseConfig.readConfig()
 	config.ClientNoiseStaticPubkeys = append(config.ClientNoiseStaticPubkeys, pubkey)
@@ -68,9 +62,6 @@ func (noiseConfig *NoiseConfig) configAddClientStaticPubkey(pubkey []byte) error
 }
 
 func (noiseConfig *NoiseConfig) getMiddlewareNoiseStaticKeypair() *noise.DHKey {
-	//device.mu.RLock()
-	//defer device.mu.RUnlock()
-
 	key := noiseConfig.readConfig().MiddlewareNoiseStaticKeypair
 	if key == nil {
 		return nil
@@ -82,9 +73,6 @@ func (noiseConfig *NoiseConfig) getMiddlewareNoiseStaticKeypair() *noise.DHKey {
 }
 
 func (noiseConfig *NoiseConfig) setMiddlewareNoiseStaticKeypair(key *noise.DHKey) error {
-	//device.mu.Lock()
-	//defer device.mu.Unlock()
-
 	config := noiseConfig.readConfig()
 	config.MiddlewareNoiseStaticKeypair = &noiseKeypair{
 		Private: key.Private,
