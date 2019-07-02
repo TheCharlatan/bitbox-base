@@ -3,11 +3,11 @@ package noisemanager
 import (
 	"crypto/rand"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
-	"github.com/digitalbitbox/bitbox-wallet-app/util/errp"
 	"github.com/flynn/noise"
 	"github.com/gorilla/websocket"
 )
@@ -34,10 +34,10 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 	cipherSuite := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
 	keypair := noiseConfig.getMiddlewareNoiseStaticKeypair()
 	if keypair == nil {
-		log.Println("noise static keypair created")
+		log.Println("Creaing noise static keypair...")
 		kp, err := cipherSuite.GenerateKeypair(rand.Reader)
 		if err != nil {
-			panic(err)
+			return errors.New("Failed to generate a new noise keypair")
 		}
 		keypair := &kp
 		if err := noiseConfig.setMiddlewareNoiseStaticKeypair(keypair); err != nil {
@@ -60,59 +60,59 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 	log.Println("Just something to indicate that the handshake is initialized")
 	_, responseBytes, err := ws.ReadMessage()
 	if err != nil {
-		panic(err)
+		return errors.New("Websocket failed to read noise handshake request")
 	}
 	if string(responseBytes) != string(opICanHasHandShaek) {
-		log.Println("Initial response bytes did not match what we were expecting")
+		return errors.New("Initial response bytes did not match what we were expecting")
 	}
 	err = ws.WriteMessage(1, []byte("ACK"))
 	if err != nil {
-		panic(err)
+		return errors.New("Websocket failed to write the noise handshake request response")
 	}
 
-	log.Println("Reading first noise message from client")
+	log.Println("Reading first noise handshake message from client")
 	_, responseBytes, err = ws.ReadMessage()
 	if err != nil {
-		panic(err)
+		return errors.New("Websocket failed to read first noise handshake message")
 	}
 	log.Println("Reading this message into the handshake state")
 	_, _, _, err = handshake.ReadMessage(nil, responseBytes)
 	if err != nil {
-		panic(err)
+		return errors.New("Noise failed to read first noise handshake message")
 	}
 	log.Println("Writing a new noise message")
 	msg, _, _, err := handshake.WriteMessage(nil, nil)
 	if err != nil {
-		panic(err)
+		return errors.New("Noise failed to write second noise handshake message")
 	}
 	err = ws.WriteMessage(1, msg)
 	if err != nil {
-		panic(err)
+		return errors.New("Websocket failed to write second noise handshake message")
 	}
 	log.Println("Reading a new noise message")
 	_, responseBytes, err = ws.ReadMessage()
 	if err != nil {
-		panic(err)
+		return errors.New("Websocket failed to read third noise handshake message")
 	}
 	log.Println("Reading this message into the noise handshake state")
 	_, noiseConfig.sendCipher, noiseConfig.receiveCipher, err = handshake.ReadMessage(nil, responseBytes)
 	if err != nil {
-		panic(err)
+		return errors.New("Noise failed to read the third noise handshake message")
 	}
 
 	// Now start the verification of the channel hash
 	noiseConfig.clientNoiseStaticPubkey = handshake.PeerStatic()
 	if len(noiseConfig.clientNoiseStaticPubkey) != 32 {
-		panic(errp.New("expected 32 byte remote static pubkey"))
+		return errors.New("The clientNoiseStaticPubkey is not 32 bytes long")
 	}
 
 	_, responseBytes, err = ws.ReadMessage()
 	if err != nil {
-		panic(err)
+		return errors.New("Websocket failed to read the pairingVerificationRequiredByClient message")
 	}
 	responseBytes, err = noiseConfig.Decrypt(responseBytes)
 	if err != nil {
-		panic(err)
+		return errors.New("Noise failed to decrypt the pairingVerificationRequiredByClient message")
 	}
 	pairingVerificationRequiredByClient := false
 	if string(responseBytes) == opICanHasPairinVerificashun {
@@ -124,7 +124,7 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 	}
 	err = ws.WriteMessage(websocket.TextMessage, noiseConfig.Encrypt(msg))
 	if err != nil {
-		panic(err)
+		return errors.New("Websocket failed to write pairingVerificationRequiredByMiddleware message")
 	}
 
 	if pairingVerificationRequiredByMiddleware || pairingVerificationRequiredByClient {
@@ -142,7 +142,7 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 		time.Sleep(2 * time.Second)
 		err = ws.WriteMessage(websocket.TextMessage, []byte("ACK"))
 		if err != nil {
-			panic(err)
+			return errors.New("Websocket failed to write the pairing accepted ACK message")
 		}
 	}
 	return nil
