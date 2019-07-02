@@ -102,10 +102,6 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 
 	// Now start the verification of the channel hash
 	noiseConfig.clientNoiseStaticPubkey = handshake.PeerStatic()
-	if len(noiseConfig.clientNoiseStaticPubkey) != 32 {
-		return errors.New("The clientNoiseStaticPubkey is not 32 bytes long")
-	}
-
 	_, responseBytes, err = ws.ReadMessage()
 	if err != nil {
 		return errors.New("Websocket failed to read the pairingVerificationRequiredByClient message")
@@ -140,7 +136,7 @@ func (noiseConfig *NoiseConfig) InitializeNoise(ws *websocket.Conn) error {
 		// For now, just add a dummy timer, since we do not have a screen yet, and make every verification a success.
 		// Also skip writing the static key to the file, since we do not want to skip the timer yet, such that we can test its behaviour.
 		time.Sleep(2 * time.Second)
-		err = ws.WriteMessage(websocket.TextMessage, []byte("ACK"))
+		err = ws.WriteMessage(websocket.TextMessage, noiseConfig.Encrypt([]byte("ACK")))
 		if err != nil {
 			return errors.New("Websocket failed to write the pairing accepted ACK message")
 		}
