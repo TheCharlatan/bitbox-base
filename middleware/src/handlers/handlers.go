@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	middleware "github.com/digitalbitbox/bitbox-base/middleware/src"
-	"github.com/digitalbitbox/bitbox-base/middleware/src/electrum"
 	noisemanager "github.com/digitalbitbox/bitbox-base/middleware/src/noise"
 	"github.com/digitalbitbox/bitbox-base/middleware/src/rpcserver"
 
@@ -112,28 +111,22 @@ func (handlers *Handlers) wsHandler(w http.ResponseWriter, r *http.Request) {
 	onElectrumMessageReceived := func(msg []byte) {
 		writeChan <- append([]byte{opElectrum}, msg...)
 	}
-	electrumClient, err := electrum.NewElectrum(handlers.electrumAddress, onElectrumMessageReceived)
-	if err != nil {
-		log.Println(err.Error() + "Electrum connection failed to initialize")
-		return
-	}
 
 	server := rpcserver.NewRPCServer(
 		handlers.middleware,
-		electrumClient,
+		handlers.electrumAddress,
+		onElectrumMessageReceived,
 	)
 	go func() {
 		for {
 			msg := <-server.RPCConnection.WriteChan()
-			writeChan <- append([]byte{opRPC}, msg...)
+			significantMsg := append([]byte{opRPC}, msg...)
+			writeChan <- significantMsg
 		}
 	}()
 	handlers.mu.Lock()
-	handlers.clientsMap[handlers.nClients] = server.RPCConnection.WriteChan()
-	onMessageReceived := func(msg []byte) {
-		server.RPCConnection.ReadChan() <- msg
-	}
-	handlers.runWebsocket(ws, onMessageReceived, writeChan, handlers.nClients)
+	handlers.clientsMap[handlers.nClients] = writeChan
+	handlers.runWebsocket(ws, server.RPCConnection.ReadChan(), writeChan, handlers.nClients)
 	handlers.nClients++
 	handlers.mu.Unlock()
 	go server.Serve()
